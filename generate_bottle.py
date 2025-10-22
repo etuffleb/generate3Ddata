@@ -34,7 +34,7 @@ except AttributeError:  # pragma: no cover - compatibility for older Pillow
 
 Color = Tuple[int, int, int]
 
-DEBUG_MODE = False
+DEBUG_MODE = True
 
 
 def clamp(value: float, minimum: float, maximum: float) -> float:
@@ -205,6 +205,20 @@ def draw_bottle(geometry: BottleGeometry, bottle_color: Color, cap_color: Color)
     return bottle_layer
 
 
+def to_int_box(box):
+    l, t, r, b = box
+    return (int(round(l)), int(round(t)), int(round(r)), int(round(b)))
+
+def initize_mesh(mesh):
+    fixed = []
+    for bbox, quad in mesh:
+        bbox_i = to_int_box(bbox)
+        if len(quad) != 8:
+            raise ValueError(f"quad must have 8 values, got {len(quad)}: {quad}")
+        quad_f = tuple(float(x) for x in quad)
+        fixed.append((bbox_i, quad_f))
+    return fixed
+
 def curve_label(label: Image.Image, curvature: float = 0.28) -> Image.Image:
     """Warp the label slightly so it hugs the cylindrical bottle body."""
 
@@ -241,7 +255,8 @@ def curve_label(label: Image.Image, curvature: float = 0.28) -> Image.Image:
         )
         mesh.append((dest_box, src_quad))
 
-    return label.transform(label.size, TRANSFORM_MESH, mesh, RESAMPLE_LANCZOS)
+    mesh_int = initize_mesh(mesh)
+    return label.transform(label.size, TRANSFORM_MESH, mesh_int, Image.Resampling.BICUBIC)
 
 
 def prepare_label(label_path: Path, target_box: Tuple[int, int, int, int]) -> Image.Image:
@@ -251,7 +266,7 @@ def prepare_label(label_path: Path, target_box: Tuple[int, int, int, int]) -> Im
     target_width = target_box[2] - target_box[0]
     target_height = target_box[3] - target_box[1]
 
-    label = ImageOps.contain(label, (target_width, target_height), method=RESAMPLE_LANCZOS)
+    label = ImageOps.contain(label, (target_width, target_height), method=Image.Resampling.BICUBIC)
 
     label = curve_label(label)
 
@@ -277,7 +292,7 @@ def compose_scene(
 ) -> Image.Image:
     """Combine the background, bottle and label layers."""
 
-    background = ImageOps.fit(background_image, geometry.canvas_size, method=RESAMPLE_LANCZOS).convert("RGBA")
+    background = ImageOps.fit(background_image, geometry.canvas_size, method=Image.Resampling.BICUBIC).convert("RGBA")
     scene = Image.alpha_composite(background, bottle_layer)
 
     label_box = geometry.label_box()
@@ -353,7 +368,7 @@ def main() -> None:
         label_path = Path('/Users/ekaterina/Desktop/cocacola.png')
         output_path = Path('/Users/ekaterina/test_codex/bottle.png')
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        background_path = Path('/Users/ekaterina/Desktop/background.png')
+        background_path = Path('/Users/ekaterina/Desktop/bg.png')
         generate_bottle(label_path, background_path, output_path, (125, 198, 245), (36, 91, 150))
 
     else:
