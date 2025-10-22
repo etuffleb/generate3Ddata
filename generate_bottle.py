@@ -29,6 +29,7 @@ except AttributeError:  # pragma: no cover - fallback for older Pillow
 
 Color = Tuple[int, int, int]
 
+DEBUG_MODE = True
 
 @dataclass
 class BottleGeometry:
@@ -260,23 +261,27 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
-    parser = build_parser()
-    args = parser.parse_args()
+    if DEBUG_MODE:
+        label_path = Path('/Users/ekaterina/Desktop/cocacola.png')
+        output_path = Path('/Users/ekaterina/test_codex/bottle.png')
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        generate_bottle(label_path, output_path, (125, 198, 245), (36, 91, 150), (242, 244, 248))
 
-    label_path: Path = args.label
-    if not label_path.exists():
-        parser.error(f"Label image '{label_path}' does not exist.")
-
-    output_path: Path
-    if args.output is None:
-        output_path = label_path.with_name(label_path.stem + "_bottle.png")
     else:
-        output_path = args.output
+        parser = build_parser()
+        args = parser.parse_args()
+        label_path: Path = args.label
+        if not label_path.exists():
+            parser.error(f"Label image '{label_path}' does not exist.")
+        output_path: Path
+        if args.output is None:
+            output_path = label_path.with_name(label_path.stem + "_bottle.png")
+        else:
+            output_path = args.output
 
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-
-    generate_bottle(label_path, output_path, args.bottle_color, args.cap_color, args.background_color)
-    print(f"Bottle image saved to {output_path}")
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        generate_bottle(label_path, output_path, args.bottle_color, args.cap_color, args.background_color)
+        print(f"Bottle image saved to {output_path}")
 
 
 if __name__ == "__main__":
