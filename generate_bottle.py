@@ -23,6 +23,8 @@ from typing import Tuple
 from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageOps
 
 from tools import clamp, parse_color, stabilise_mesh
+import cv2
+import numpy as np
 
 try:  # Pillow >= 9.1
     RESAMPLE_LANCZOS = Image.Resampling.LANCZOS
@@ -44,9 +46,9 @@ class BottleGeometry:
     canvas_size: Tuple[int, int] = (900, 1400)
     body_width_ratio: float = 0.38
     body_height_ratio: float = 0.52
-    neck_width_ratio: float = 0.22
-    neck_height_ratio: float = 0.16
-    shoulder_height_ratio: float = 0.08
+    neck_width_ratio: float = 0.15
+    neck_height_ratio: float = 0.18
+    shoulder_height_ratio: float = 0.06
     cap_height_ratio: float = 0.055
 
     def body_box(self) -> Tuple[float, float, float, float]:
@@ -59,7 +61,7 @@ class BottleGeometry:
 
     def neck_box(self) -> Tuple[float, float, float, float]:
         width, height = self.canvas_size
-        neck_width = width * self.neck_width_ratio
+        neck_width = width * self.neck_width_ratio 
         body_top = self.body_box()[1]
         neck_height = height * self.neck_height_ratio
         left = width / 2 - neck_width / 2
@@ -69,10 +71,10 @@ class BottleGeometry:
         width, height = self.canvas_size
         body = self.body_box()
         shoulder_height = height * self.shoulder_height_ratio
-        left = body[0] - (body[2] - body[0]) * 0.12
-        right = body[2] + (body[2] - body[0]) * 0.12
-        top = body[1] - shoulder_height
-        bottom = body[1] + shoulder_height * 0.35
+        left = body[0] - (body[2] - body[0]) * 0
+        right = body[2] + (body[2] - body[0]) * 0
+        top = body[1] - shoulder_height * 0.4
+        bottom = body[1] + shoulder_height * 1.5
         return (left, top, right, bottom)
 
     def cap_box(self) -> Tuple[float, float, float, float]:
@@ -80,16 +82,17 @@ class BottleGeometry:
         height = self.canvas_size[1]
         cap_height = height * self.cap_height_ratio
         neck_center = (neck[0] + neck[2]) / 2
-        cap_width = (neck[2] - neck[0]) * 0.8
+        cap_width = (neck[2] - neck[0]) * 1.1
         left = neck_center - cap_width / 2
-        return (left, neck[1] - cap_height, left + cap_width, neck[1])
+        on_neck = cap_height * 0.25
+        return (left, neck[1] - cap_height + on_neck, left + cap_width, neck[1] + on_neck)
 
     def label_box(self) -> Tuple[int, int, int, int]:
         body = self.body_box()
         width = body[2] - body[0]
         height = body[3] - body[1]
-        label_width = int(width * 0.88)
-        label_height = int(height * 0.4)
+        label_width = int(width)
+        label_height = int(height * 0.2)
         center_x = (body[0] + body[2]) / 2
         label_left = int(center_x - label_width / 2)
         label_top = int(body[1] + height * 0.32)
@@ -99,6 +102,7 @@ class BottleGeometry:
             label_left + label_width,
             label_top + label_height,
         )
+    
 def draw_bottle(geometry: BottleGeometry, bottle_color: Color, cap_color: Color) -> Image.Image:
     """Render the bottle silhouette and return it as an RGBA image."""
 
@@ -114,10 +118,7 @@ def draw_bottle(geometry: BottleGeometry, bottle_color: Color, cap_color: Color)
     draw.rounded_rectangle(neck, radius=(neck[2] - neck[0]) * 0.3, fill=bottle_rgba)
 
     shoulder = geometry.shoulder_box()
-    shoulder_layer = Image.new("RGBA", (width, height), (0, 0, 0, 0))
-    shoulder_draw = ImageDraw.Draw(shoulder_layer)
-    shoulder_draw.pieslice(shoulder, start=180, end=360, fill=bottle_rgba)
-    bottle_layer = Image.alpha_composite(bottle_layer, shoulder_layer)
+    draw.ellipse(shoulder, fill=bottle_rgba)
     cap = geometry.cap_box()
     cap_layer = Image.new("RGBA", (width, height), (0, 0, 0, 0))
     cap_draw = ImageDraw.Draw(cap_layer)
@@ -244,44 +245,42 @@ def draw_bottle(geometry: BottleGeometry, bottle_color: Color, cap_color: Color)
     bottle_layer = Image.alpha_composite(bottle_layer, shadow)
 
     return bottle_layer
-def curve_label(label: Image.Image, curvature: float = 0.28) -> Image.Image:
-    """Warp the label slightly so it hugs the cylindrical bottle body."""
 
-    width, height = label.size
-    slices = max(10, int(width / 20))
-    mesh = []
 
-    for slice_index in range(slices):
-        x0 = width * slice_index / slices
-        x1 = width * (slice_index + 1) / slices
-        dest_box = (x0, 0, x1, height)
+def curve_label(label_pil: Image.Image, 
+                theta_max: float = 2.5, 
+                vertical_bulge: float = 0.25) -> Image.Image:
+    # --- Pillow -> NumPy (RGBA → BGRA) ---
+    label_np = np.array(label_pil)
+    if label_np.ndim == 2:
+        label_bgr = cv2.cvtColor(label_np, cv2.COLOR_GRAY2BGR)
+    elif label_np.shape[2] == 4:
+        label_bgr = cv2.cvtColor(label_np, cv2.COLOR_RGBA2BGRA)
+    else:
+        label_bgr = cv2.cvtColor(label_np, cv2.COLOR_RGB2BGR)
 
-        mid_x = (x0 + x1) / 2
-        # Map to the range [-1, 1].
-        rel = (mid_x / width) * 2 - 1
-        scale = 1 - curvature * (rel ** 2)
-        scale = clamp(scale, 0.55, 1.0)
-        src_slice_width = (x1 - x0) / scale
+    # --- Здесь вызываем remap (код из прошлого примера) ---
+    H, W = label_bgr.shape[:2]
+    xs = np.linspace(-0.5, 0.5, W, dtype=np.float32)
+    ys = np.linspace(0, 1, H, dtype=np.float32)
+    X, Y = np.meshgrid(xs, ys)
+    sin_th = X / 0.5 * np.sin(theta_max)
+    sin_th = np.clip(sin_th, -0.999999, 0.999999)
+    theta = np.arcsin(sin_th)
+    u = (theta + theta_max) / (2 * theta_max)
+    y_offset = vertical_bulge * (1 - np.cos(theta))
+    v = np.clip(Y - y_offset, 0, 1)
+    map_x = (u * (W - 1)).astype(np.float32)
+    map_y = (v * (H - 1)).astype(np.float32)
 
-        src_mid_x = width / 2 + (mid_x - width / 2) / scale
-        src_x0 = clamp(src_mid_x - src_slice_width / 2, 0, width)
-        src_x1 = clamp(src_mid_x + src_slice_width / 2, 0, width)
+    warped = cv2.remap(label_bgr, map_x, map_y,
+                       interpolation=cv2.INTER_CUBIC,
+                       borderMode=cv2.BORDER_REPLICATE)
 
-        top_offset = curvature * 18 * (1 - abs(rel))
-        src_quad = (
-            src_x0,
-            clamp(0 - top_offset, 0, height),
-            src_x1,
-            clamp(0 - top_offset, 0, height),
-            src_x1,
-            clamp(height + top_offset, 0, height),
-            src_x0,
-            clamp(height + top_offset, 0, height),
-        )
-        mesh.append((dest_box, src_quad))
+    # --- NumPy -> Pillow (BGR → RGB) ---
+    warped_rgb = cv2.cvtColor(warped, cv2.COLOR_BGRA2RGBA) if warped.shape[2] == 4 else cv2.cvtColor(warped, cv2.COLOR_BGR2RGB)
+    return Image.fromarray(warped_rgb)
 
-    mesh_int = stabilise_mesh(mesh, width=width)
-    return label.transform(label.size, TRANSFORM_MESH, mesh_int, Image.Resampling.BICUBIC)
 
 
 def prepare_label(label_path: Path, target_box: Tuple[int, int, int, int]) -> Image.Image:
@@ -299,9 +298,9 @@ def prepare_label(label_path: Path, target_box: Tuple[int, int, int, int]) -> Im
     fade = Image.new("L", label.size, color=255)
     fade_draw = ImageDraw.Draw(fade)
     w, h = label.size
-    gradient_width = max(1, int(w * 0.2))
+    gradient_width = max(1, int(w * 0.4))
     for i in range(gradient_width):
-        alpha = int(255 * (1 - i / gradient_width * 0.75))
+        alpha = 255 - int(255 * (1 - i / gradient_width * 0.97))
         fade_draw.line([(i, 0), (i, h)], fill=alpha)
         fade_draw.line([(w - 1 - i, 0), (w - 1 - i, h)], fill=alpha)
     label.putalpha(ImageChops.multiply(label.split()[-1], fade))
