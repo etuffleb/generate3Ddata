@@ -20,7 +20,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Tuple
 
-from PIL import Image, ImageChops, ImageColor, ImageDraw, ImageFilter, ImageOps
+from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageOps
+
+from tools import clamp, parse_color, stabilise_mesh
 
 try:  # Pillow >= 9.1
     RESAMPLE_LANCZOS = Image.Resampling.LANCZOS
@@ -35,13 +37,6 @@ except AttributeError:  # pragma: no cover - compatibility for older Pillow
 Color = Tuple[int, int, int]
 
 DEBUG_MODE = True
-
-
-def clamp(value: float, minimum: float, maximum: float) -> float:
-    """Clamp *value* into the inclusive range [minimum, maximum]."""
-
-    return max(minimum, min(maximum, value))
-
 @dataclass
 class BottleGeometry:
     """Holds the key measurements that define the bottle layout."""
@@ -104,18 +99,6 @@ class BottleGeometry:
             label_left + label_width,
             label_top + label_height,
         )
-
-
-def parse_color(value: str) -> Color:
-    """Parse a color value accepted by Pillow (name or hex)."""
-
-    try:
-        r, g, b = ImageColor.getrgb(value)
-    except ValueError as exc:  # pragma: no cover - handled by argparse
-        raise argparse.ArgumentTypeError(str(exc)) from exc
-    return (r, g, b)
-
-
 def draw_bottle(geometry: BottleGeometry, bottle_color: Color, cap_color: Color) -> Image.Image:
     """Render the bottle silhouette and return it as an RGBA image."""
 
@@ -131,7 +114,10 @@ def draw_bottle(geometry: BottleGeometry, bottle_color: Color, cap_color: Color)
     draw.rounded_rectangle(neck, radius=(neck[2] - neck[0]) * 0.3, fill=bottle_rgba)
 
     shoulder = geometry.shoulder_box()
-    draw.ellipse(shoulder, fill=bottle_rgba)
+    shoulder_layer = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    shoulder_draw = ImageDraw.Draw(shoulder_layer)
+    shoulder_draw.pieslice(shoulder, start=180, end=360, fill=bottle_rgba)
+    bottle_layer = Image.alpha_composite(bottle_layer, shoulder_layer)
     cap = geometry.cap_box()
     cap_layer = Image.new("RGBA", (width, height), (0, 0, 0, 0))
     cap_draw = ImageDraw.Draw(cap_layer)
@@ -150,6 +136,31 @@ def draw_bottle(geometry: BottleGeometry, bottle_color: Color, cap_color: Color)
         fill=(255, 255, 255, 80),
     )
 
+    # Add vertical grip stripes with a gentle blur to mimic injection-moulded plastic.
+    stripe_layer = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    stripe_draw = ImageDraw.Draw(stripe_layer)
+    stripe_count = 12
+    cap_width = cap[2] - cap[0]
+    cap_height = cap[3] - cap[1]
+    for i in range(stripe_count):
+        mix = (i + 0.5) / stripe_count
+        center_emphasis = 1 - abs(mix - 0.5) * 2
+        alpha = int(65 + 70 * center_emphasis)
+        stripe_left = cap[0] + cap_width * i / stripe_count
+        stripe_right = stripe_left + cap_width / (stripe_count * 2.2)
+        stripe_draw.rounded_rectangle(
+            (
+                stripe_left,
+                cap[1] + cap_height * 0.1,
+                stripe_right,
+                cap[3] - cap_height * 0.1,
+            ),
+            radius=cap_height * 0.15,
+            fill=(255, 255, 255, alpha),
+        )
+    stripe_layer = stripe_layer.filter(ImageFilter.GaussianBlur(radius=3))
+    cap_layer = Image.alpha_composite(cap_layer, stripe_layer)
+
     # Horizontal ridges mimic screw threads.
     ridge_count = 5
     for i in range(ridge_count):
@@ -159,6 +170,36 @@ def draw_bottle(geometry: BottleGeometry, bottle_color: Color, cap_color: Color)
             fill=(255, 255, 255, 90 if i % 2 == 0 else 60),
             width=1,
         )
+
+    # Emphasise lighting with a bright highlight on the left and a shadow on the right.
+    cap_highlight = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    cap_highlight_draw = ImageDraw.Draw(cap_highlight)
+    cap_highlight_draw.ellipse(
+        (
+            cap[0] + cap_width * 0.08,
+            cap[1] + cap_height * 0.15,
+            cap[0] + cap_width * 0.38,
+            cap[3] - cap_height * 0.1,
+        ),
+        fill=(255, 255, 255, 140),
+    )
+    cap_highlight = cap_highlight.filter(ImageFilter.GaussianBlur(radius=8))
+    cap_layer = Image.alpha_composite(cap_layer, cap_highlight)
+
+    cap_shadow = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    cap_shadow_draw = ImageDraw.Draw(cap_shadow)
+    cap_shadow_draw.rounded_rectangle(
+        (
+            cap[0] + cap_width * 0.55,
+            cap[1] + cap_height * 0.05,
+            cap[2] - cap_width * 0.05,
+            cap[3] - cap_height * 0.05,
+        ),
+        radius=cap_height * 0.2,
+        fill=(0, 0, 0, 120),
+    )
+    cap_shadow = cap_shadow.filter(ImageFilter.GaussianBlur(radius=10))
+    cap_layer = Image.alpha_composite(cap_layer, cap_shadow)
 
     bottle_layer = Image.alpha_composite(bottle_layer, cap_layer)
 
@@ -203,22 +244,6 @@ def draw_bottle(geometry: BottleGeometry, bottle_color: Color, cap_color: Color)
     bottle_layer = Image.alpha_composite(bottle_layer, shadow)
 
     return bottle_layer
-
-
-def to_int_box(box):
-    l, t, r, b = box
-    return (int(round(l)), int(round(t)), int(round(r)), int(round(b)))
-
-def initize_mesh(mesh):
-    fixed = []
-    for bbox, quad in mesh:
-        bbox_i = to_int_box(bbox)
-        if len(quad) != 8:
-            raise ValueError(f"quad must have 8 values, got {len(quad)}: {quad}")
-        quad_f = tuple(float(x) for x in quad)
-        fixed.append((bbox_i, quad_f))
-    return fixed
-
 def curve_label(label: Image.Image, curvature: float = 0.28) -> Image.Image:
     """Warp the label slightly so it hugs the cylindrical bottle body."""
 
@@ -255,7 +280,7 @@ def curve_label(label: Image.Image, curvature: float = 0.28) -> Image.Image:
         )
         mesh.append((dest_box, src_quad))
 
-    mesh_int = initize_mesh(mesh)
+    mesh_int = stabilise_mesh(mesh, width=width)
     return label.transform(label.size, TRANSFORM_MESH, mesh_int, Image.Resampling.BICUBIC)
 
 
