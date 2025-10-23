@@ -1,9 +1,9 @@
-"""Generate a stylised bottle image from a label.
+"""Generate stylised bottle images from a label.
 
 This module provides a small command line utility that accepts a label image
 and composites it on top of a procedurally generated plastic bottle.  The
-result is a PNG image that can be used to quickly prototype what a label might
-look like when wrapped around a bottle.
+result is a trio of PNG images that can be used to quickly prototype what a
+label might look like when wrapped around a bottle from three viewing angles.
 
 Example
 -------
@@ -18,7 +18,7 @@ from __future__ import annotations
 import argparse
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Tuple
+from typing import Optional, Tuple, cast
 
 from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageOps
 
@@ -283,14 +283,22 @@ def curve_label(label_pil: Image.Image,
 
 
 
-def prepare_label(label_path: Path, target_box: Tuple[int, int, int, int]) -> Image.Image:
-    """Load and reshape the label so it fits the bottle nicely."""
+def prepare_label(
+    label_image: Image.Image,
+    target_box: Tuple[int, int, int, int],
+    crop_position: float,
+) -> Image.Image:
+    """Reshape the label so it fits the bottle nicely with a horizontal crop."""
 
-    label = Image.open(label_path).convert("RGBA")
     target_width = target_box[2] - target_box[0]
     target_height = target_box[3] - target_box[1]
 
-    label = ImageOps.contain(label, (target_width, target_height), method=Image.Resampling.BICUBIC)
+    label = ImageOps.fit(
+        label_image,
+        (target_width, target_height),
+        method=Image.Resampling.BICUBIC,
+        centering=(crop_position, 0.5),
+    )
 
     label = curve_label(label)
     label = curve_label(label)
@@ -345,21 +353,55 @@ def compose_scene(
     return scene
 
 
+def average_label_color(label_image: Image.Image) -> Color:
+    """Return the average colour of the label, respecting transparency."""
+
+    rgba = np.array(label_image.convert("RGBA"), dtype=np.float32)
+    rgb = rgba[..., :3]
+    alpha = rgba[..., 3:4] / 255.0
+    alpha_sum = float(alpha.sum())
+
+    if alpha_sum > 0:
+        weighted_sum = (rgb * alpha).sum(axis=(0, 1))
+        mean = weighted_sum / alpha_sum
+    else:
+        mean = rgb.mean(axis=(0, 1))
+
+    mean_tuple = tuple(int(round(clamp(float(c), 0, 255))) for c in mean)
+    return cast(Color, mean_tuple)
+
+
+def variant_output_path(base_path: Path, variant: str) -> Path:
+    suffix = base_path.suffix or ".png"
+    stem = base_path.stem
+    return base_path.with_name(f"{stem}_{variant}{suffix}")
+
+
 def generate_bottle(
     label_path: Path,
     background_path: Path,
     output_path: Path,
     bottle_color: Color,
-    cap_color: Color,
+    cap_color: Optional[Color] = None,
 ) -> None:
-    """High level function that orchestrates the bottle generation."""
+    """High level function that orchestrates the bottle generation for three crops."""
 
     geometry = BottleGeometry()
-    bottle_layer = draw_bottle(geometry, bottle_color, cap_color)
-    label_image = prepare_label(label_path, geometry.label_box())
+    label_image = Image.open(label_path).convert("RGBA")
     background_image = Image.open(background_path)
-    scene = compose_scene(label_image, bottle_layer, geometry, background_image)
-    scene.save(output_path)
+
+    if cap_color is None:
+        cap_color = average_label_color(label_image)
+
+    if output_path.suffix == "":
+        output_path = output_path.with_suffix(".png")
+
+    bottle_layer = draw_bottle(geometry, bottle_color, cap_color)
+
+    for variant_name, crop_position in (("left", 0.0), ("center", 0.5), ("right", 1.0)):
+        prepared_label = prepare_label(label_image, geometry.label_box(), crop_position)
+        scene = compose_scene(prepared_label, bottle_layer, geometry, background_image)
+        scene.save(variant_output_path(output_path, variant_name))
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -382,8 +424,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--cap-color",
         type=parse_color,
-        default="#245b96",
-        help="Bottle cap colour (default: darker blue).",
+        default=None,
+        help="Bottle cap colour (default: average colour of the label).",
     )
     return parser
 
@@ -394,6 +436,8 @@ def main() -> None:
         output_path = Path('/Users/ekaterina/test_codex/bottle.png')
         output_path.parent.mkdir(parents=True, exist_ok=True)
         background_path = Path('/Users/ekaterina/Desktop/bg.png')
+        if output_path.suffix == "":
+            output_path = output_path.with_suffix('.png')
         generate_bottle(label_path, background_path, output_path, (125, 198, 245), (36, 91, 150))
 
     else:
@@ -411,9 +455,17 @@ def main() -> None:
         else:
             output_path = args.output
 
+        if output_path.suffix == "":
+            output_path = output_path.with_suffix(".png")
         output_path.parent.mkdir(parents=True, exist_ok=True)
         generate_bottle(label_path, background_path, output_path, args.bottle_color, args.cap_color)
-        print(f"Bottle image saved to {output_path}")
+        print(
+            "Generated bottle images:",
+            ", ".join(
+                str(variant_output_path(output_path, variant))
+                for variant in ("left", "center", "right")
+            ),
+        )
 
 
 if __name__ == "__main__":
