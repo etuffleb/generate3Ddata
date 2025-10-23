@@ -111,7 +111,7 @@ def draw_bottle(geometry: BottleGeometry, bottle_color: Color, cap_color: Color)
     draw = ImageDraw.Draw(bottle_layer)
 
     body = geometry.body_box()
-    bottle_rgba = bottle_color + (110,)
+    bottle_rgba = bottle_color + (90,)
     draw.rounded_rectangle(body, radius=(body[2] - body[0]) * 0.18, fill=bottle_rgba)
 
     neck = geometry.neck_box()
@@ -248,8 +248,8 @@ def draw_bottle(geometry: BottleGeometry, bottle_color: Color, cap_color: Color)
 
 
 def curve_label(label_pil: Image.Image, 
-                theta_max: float = 2.5, 
-                vertical_bulge: float = 0.25) -> Image.Image:
+                theta_max: float = 1.2, 
+                vertical_bulge: float = 0.12) -> Image.Image:
     # --- Pillow -> NumPy (RGBA → BGRA) ---
     label_np = np.array(label_pil)
     if label_np.ndim == 2:
@@ -292,6 +292,7 @@ def prepare_label(label_path: Path, target_box: Tuple[int, int, int, int]) -> Im
 
     label = ImageOps.contain(label, (target_width, target_height), method=Image.Resampling.BICUBIC)
 
+    label = curve_label(label)
     label = curve_label(label)
 
     # Simulate the curvature of the bottle by fading the edges slightly.
@@ -389,7 +390,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> None:
     if DEBUG_MODE:
-        label_path = Path('/Users/ekaterina/Desktop/cocacola.png')
+        label_path = Path('/Users/ekaterina/Desktop/coca.png')
         output_path = Path('/Users/ekaterina/test_codex/bottle.png')
         output_path.parent.mkdir(parents=True, exist_ok=True)
         background_path = Path('/Users/ekaterina/Desktop/bg.png')
