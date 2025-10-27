@@ -53,12 +53,15 @@ mapping.inputs['Location'].default_value[1] = 0.0  # не сдвигать
 links.new(tex_coord.outputs['UV'], mapping.inputs['Vector'])
 links.new(mapping.outputs['Vector'], tex_image.inputs['Vector'])
 
-# Шейдер
-bsdf = nodes.new(type='ShaderNodeBsdfPrincipled')
-bsdf.inputs["Roughness"].default_value = 0.5
+# Маска по высоте с использованием координат объекта
+links.new(tex_coord.outputs['Object'], separate_xyz.inputs['Vector'])
+links.new(separate_xyz.outputs['Z'], math_abs.inputs[0])
+links.new(math_abs.outputs[0], math_compare.inputs[0])
 
-output = nodes.new(type='ShaderNodeOutputMaterial')
-links.new(tex_image.outputs['Color'], bsdf.inputs['Base Color'])
+# Смешиваем цвет бутылки и этикетку
+links.new(tex_image.outputs['Color'], mix_rgb.inputs[2])
+links.new(math_compare.outputs[0], mix_rgb.inputs['Fac'])
+links.new(mix_rgb.outputs['Color'], bsdf.inputs['Base Color'])
 links.new(bsdf.outputs['BSDF'], output.inputs['Surface'])
 
 bottle.data.materials.append(mat)
