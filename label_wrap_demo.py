@@ -55,9 +55,9 @@ mapping = nodes.new(type='ShaderNodeMapping')
 mapping.location = (-600, 0)
 
 # Располагаем этикетку по центру и задаём её высоту
-scale_y = CYLINDER_HEIGHT / LABEL_HEIGHT
+scale_y = LABEL_HEIGHT / CYLINDER_HEIGHT
 mapping.inputs['Scale'].default_value[1] = scale_y
-mapping.inputs['Location'].default_value[1] = 0.5 - 0.5 / scale_y
+mapping.inputs['Location'].default_value[1] = 0.5 - 0.5 * scale_y
 
 tex_image = nodes.new(type='ShaderNodeTexImage')
 tex_image.location = (-400, 0)
@@ -78,22 +78,28 @@ output.location = (300, 0)
 separate_xyz = nodes.new(type='ShaderNodeSeparateXYZ')
 separate_xyz.location = (-800, -200)
 
+math_subtract = nodes.new(type='ShaderNodeMath')
+math_subtract.location = (-600, -200)
+math_subtract.operation = 'SUBTRACT'
+
 math_abs = nodes.new(type='ShaderNodeMath')
-math_abs.location = (-600, -200)
+math_abs.location = (-400, -200)
 math_abs.operation = 'ABSOLUTE'
 
 math_compare = nodes.new(type='ShaderNodeMath')
-math_compare.location = (-400, -200)
+math_compare.location = (-200, -200)
 math_compare.operation = 'LESS_THAN'
-math_compare.inputs[1].default_value = LABEL_HEIGHT / 2.0
+math_compare.inputs[1].default_value = scale_y * 0.5
 
 # Линки координат
 links.new(tex_coord.outputs['UV'], mapping.inputs['Vector'])
 links.new(mapping.outputs['Vector'], tex_image.inputs['Vector'])
 
-# Маска по высоте с использованием координат объекта
-links.new(tex_coord.outputs['Object'], separate_xyz.inputs['Vector'])
-links.new(separate_xyz.outputs['Z'], math_abs.inputs[0])
+# Маска по высоте с использованием UV-координат
+links.new(tex_coord.outputs['UV'], separate_xyz.inputs['Vector'])
+links.new(separate_xyz.outputs['Y'], math_subtract.inputs[0])
+math_subtract.inputs[1].default_value = 0.5
+links.new(math_subtract.outputs[0], math_abs.inputs[0])
 links.new(math_abs.outputs[0], math_compare.inputs[0])
 
 # Смешиваем цвет бутылки и этикетку
